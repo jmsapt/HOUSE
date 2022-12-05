@@ -13,3 +13,4 @@ Compiling & Running
  - To compile main library and examples, run compile.sh (requires g++ compiler)
  - To generate CUT points (needed for examples), run cut_sigma_points.m (modify addpath if necessary)
  - To run examples, use the run.sh scripts in the subdirectories
+# HOUSE
