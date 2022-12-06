@@ -1,6 +1,6 @@
 % CUTpoints submodule name
 
-addpath('../CUTpoints/')
+addpath('./CUTpoints/')
 
 for n = 1:20
     
@@ -28,4 +28,4 @@ for n = 1:20
     
 end
 
-rmpath('../CUTpoints/')
+rmpath('./CUTpoints/')
