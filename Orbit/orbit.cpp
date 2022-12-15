@@ -15,7 +15,7 @@
 #include "eigen_csv.hpp"
 #include "timer.hpp"
 
-#define G_0 9.80665
+#define MU 6.6743E-11 * 5.972E24
 
 #define DEG M_PI / 180
 #define ARC_MIN M_PI / (180 * 60)
@@ -39,30 +39,34 @@ string filter_file(bool gauss, const string& filter, int trial) {
 }
 
 void run(bool gauss) {
-
     DynamicModel::stf g = [] (double t, const VectorXd& X, const VectorXd& fd)
         -> VectorXd {
-            double d = -BB * X.tail(3).norm();
-            VectorXd Xd(6);
-            Xd.head(3) = X.tail(3);
-            Xd.tail(3) = d * X.tail(3) + fd;
-            Xd(5) -= G_0;
-            return Xd;
-        };
+            VectorXd Xf(6);
+            VectorXd r(3);
+            VectorXd v(3);
+            r = X.head(3);
+            v = X.tail(3);
 
+            // (d/dt) r = v
+            Xf.head(3) = v;
+
+            // (d/dt) v = -mu/|r|^3 * r
+            Xf(3) = -MU / pow(r.norm(), 3) * r(0);
+            Xf(4) = -MU / pow(r.norm(), 3) * r(1);
+            Xf(5) = -MU / pow(r.norm(), 3) * r(2);
+            return Xf;
+        };
+    // errors were previously 1E-9
     DynamicModel f(g, 6, 1E-9, 1E-9);
 
     UKF::meas_model h = [] (double t, const VectorXd& X)
         -> VectorXd {
-            double r = X.head(2).norm();
+            double r = X.head(3).norm();
             Vector2d z;
-            if (r > THRESHOLD) {
-                z(0) = atan2(X(1), -X(0));
-                z(1) = atan2(X(2), r);
-            } else {
-                z(0) = 0;
-                z(1) = M_PI / 2;
-            }
+            
+            z(0) = atan2(X(1), X(0));
+            z(1) = atan2(X(2), r);
+
             return z;
         };
 
@@ -72,10 +76,13 @@ void run(bool gauss) {
         };
 
     double stdw, stdn;
-    stdw = 0.01;
-    stdn = ARC_MIN;
+    stdw = ARC_SEC; // disturbing force not currently being considered so this won't affect anthing
+    // sigma for both measurement values, ideally <0.4, 0.07> arc seconds.
+    stdn = ARC_SEC;
 
     Matrix3d Pww = Matrix3d::Identity() * stdw * stdw;
+
+    // Pnn is measurement noise matrix
     Matrix2d Pnn = Matrix2d::Identity() * stdn * stdn;
 
     double skeww, skewn, kurtw, kurtn, stdx0, stdv0, skew0, kurt0;
@@ -96,7 +103,7 @@ void run(bool gauss) {
         skeww = 1;
         kurtw = 30;
 
-        skewn = -1;
+        skewn =  -1;
         kurtn =  30;
 
         skew0 = 1;
@@ -104,13 +111,16 @@ void run(bool gauss) {
 
     }
 
-    stdx0 = 250;
+
+    // standard deviation for initial state (assume to be the same as measurement)
+    stdx0 = 1000;
     stdv0 = 100;
 
     VectorXd X0m(6), X0std(6), X0skew(6), X0kurt(6);
 
     // initializes X0m with these constants
-    X0m  << 1000, 1000, 0, 500, 0, 500;
+    X0m  << 5052.160, -2343.109, -4903.437, 0.477, 6.671, -2.888;
+    X0m *= 1000;
 
     // sets front half to stdx0
     X0std.head(3).setConstant(stdx0);
@@ -161,10 +171,11 @@ void run(bool gauss) {
 
     HOUSE house(f, hh, 2, 0, distx0, distw, distn, 0);
 
-    double dt = 0.1;
-    double tmin = 1;
- 
-    int trials = 1;
+    // time steps of 1s for N orbits
+    double dt = 1;
+    double tmin = 6360 * 5;
+
+    int trials = 10;
 
     vector<string> header(7);
     header[0] = "t";
@@ -206,8 +217,8 @@ void run(bool gauss) {
                 X = f(time, time+dt, X, fd);
                 time += dt;
                 Xtru.push_back(X);
-            } while (X(2) > 0);
-         } while (time < tmin);
+            } while (time < tmin);
+        } while  (0);//(time < tmin);
 
         int steps = Xtru.size();
 
@@ -251,11 +262,11 @@ void run(bool gauss) {
         run_times(j-1, 2) = timer.tock();
         cut4.save(filter_file(gauss, "cut4", j));
 
-        cout << "   CUT-6" << endl;
-        timer.tick();
-        cut6.run(t, Ztru);
-        run_times(j-1, 3) = timer.tock();
-        cut6.save(filter_file(gauss, "cut6", j));
+        // cout << "   CUT-6" << endl;
+        // timer.tick();
+        // cut6.run(t, Ztru);
+        // run_times(j-1, 3) = timer.tock();
+        // cut6.save(filter_file(gauss, "cut6", j));
 
     }
 

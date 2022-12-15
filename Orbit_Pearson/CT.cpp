@@ -2,16 +2,34 @@
 #include "house.hpp"
 #include "eigen_csv.hpp"
 #include "timer.hpp"
+#include "pearsonator.hpp"
 
 #include <Eigen/Dense>
 
 #include <iostream>
-#include <random>
-#include <vector>
-#include <string>
 
 using namespace Eigen;
 using namespace std;
+
+
+
+// /* The rhs of x' = f(x) */
+// void ode( const state_type &x , state_type &dxdt , const double /* t */ )
+// {   
+//     Vector3d r;
+//     r << x[0], x[1], x[2];
+
+//     // velocity
+//     dxdt[0] = x[3];
+//     dxdt[1] = x[4];
+//     dxdt[2] = x[5];
+
+//     // acceleration
+//     dxdt[3] = -mu/pow(r.norm(), 3) * x[0];
+//     dxdt[4] = -mu/pow(r.norm(), 3) * x[1];
+//     dxdt[5] = -mu/pow(r.norm(), 3) * x[2];
+// }
+
 
 // One degree (in radians)
 const double deg = M_PI / 180;
@@ -19,19 +37,9 @@ const double deg = M_PI / 180;
 // Dynamical model
 VectorXd ct_prop(double ti, double tf, const VectorXd& x, const VectorXd& w) {
     VectorXd xf(5);
-    // equation 74
-    // x = [ξ   ξ_dot   η   η_dot   Ω]^T
-    // W represent Ω (omega)
     double W = x(4);
     double T = tf - ti;
-    /*if (fabs(W) < 1E-9) {
-        xf = x;
-        xf(0) += T * xf(1);
-        xf(2) += T * xf(3);
-    } else {*/
-
-    // This only requires computing once, instead of at every reference to the 
-    // sinosoidal functions
+    
     double sinWT = sin(W*T);
     double cosWT = cos(W*T);
     MatrixXd F(5,5);
@@ -41,13 +49,12 @@ VectorXd ct_prop(double ti, double tf, const VectorXd& x, const VectorXd& w) {
             0, sinWT,       0, cosWT,        0,
             0, 0,           0, 0,            1;
     xf = F * x;
-    //}
     return xf + w;
 }
 
 // Measurement model
 Vector2d ct_meas(double t, const VectorXd& x) {
-    // equation 76
+
     Vector2d z;
 
     double xi  = x(0);
@@ -77,16 +84,13 @@ VectorXd ct_tru(double t) {
     VectorXd x(5);
     double dt, xc, yc;
 
-    // Before turn
     if (t <= tl) {
         x(0) = x0 - v * t;
         x(2) = y0;
         x(1) = -v;
         x(3) = 0;
         x(4) = 0;
-    }
-    // During Turn 1
-    else if (t <= tl + t1) {
+    } else if (t <= tl + t1) {
         dt = t - tl;
         xc = x0 - l;
         yc = y0 - r1;
@@ -95,18 +99,14 @@ VectorXd ct_tru(double t) {
         x(1) = -w1 * r1 * sin(w1 * dt + M_PI/2);
         x(3) =  w1 * r1 * cos(w1 * dt + M_PI/2);
         x(4) =  w1;
-    }
-    // Between turns 1 and 2
-    else if (t <= 2*tl + t1) {
+    } else if (t <= 2*tl + t1) {
         dt = t - tl - t1;
         x(0) = x0 - l - r1;
         x(2) = y0 - r1 - v * dt;
         x(1) = 0;
         x(3) = -v;
         x(4) = 0;
-    }
-    // During turn 2
-    else if (t <= 2*tl + t1 + t2) {
+    } else if (t <= 2*tl + t1 + t2) {
         dt = t - 2*tl - t1;
         xc = x0 - l - r1 - r2;
         yc = y0 - l - r1;
@@ -115,9 +115,7 @@ VectorXd ct_tru(double t) {
         x(1) = -w2 * r2 * sin(w2 * dt);
         x(3) =  w2 * r2 * cos(w2 * dt);
         x(4) =  w2;
-    }
-    // after turn 2
-    else {
+    } else {
         dt = t - 2*tl - t1 - t2;
         x(0) = x0 - l - r1 - r2 - v*dt;
         x(2) = y0     - r1 - r2 - l;
@@ -164,6 +162,15 @@ int main() {
     l1  = 0.16;
     l2  = 0.01;
 
+    // Skewness & kurtosis
+    double skewnth, skewnr, kurtnth, kurtnr, kurt0, kurtw;
+    skewnth = -1;
+    kurtnth =  20;
+    skewnr  = -1;
+    kurtnr  = 20;
+    kurt0 = 10;
+    kurtw = 10;
+
     // Measurement noise covariance
     Matrix2d R;
     R << sr*sr, 0,
@@ -175,13 +182,17 @@ int main() {
     mxi << 25000, -120, 10000, 0, 0.000001;
     MatrixXd Pxxi = cxx.cwiseAbs2().asDiagonal();
 
-    // HOUSE distributions (gauss dist, hence no skew or kurtosis)
+    // HOUSE distributions
     HOUSE::Dist distXi(Pxxi), distn(R);
     distXi.mean = mxi;
+    distn.skew << skewnr, skewnth;
+    distn.kurt << kurtnr, kurtnth;
+    distXi.kurt.setConstant(kurt0);
 
-    // Normal noise generator
+    // Pearson noise generator
     mt19937_64 mt;
-    normal_distribution<double> nd;
+    Pearsonator::TypeIV gennr(0, sr, skewnr, kurtnr),
+        gennth(0, sth, skewnth, kurtnth);
 
     // Time step lengths
     const int Ntimes = 4;
@@ -253,6 +264,7 @@ int main() {
 
         // HOUSE process noise distributions
         HOUSE::Dist distw(Q);
+        distw.kurt.setConstant(kurtw);
 
         // Initialize UKF & CUT filters
         UKF ukf (f, h, true, 0, mxi, Pxxi, Q, R, UKF::sig_type::JU,   1);
@@ -269,7 +281,7 @@ int main() {
         // Run multiple tests
         for (int j = 0; j < Ntest; j++) {
 
-            cout << "Running Trial " << j+1 << endl;
+            // cout << "Running Trial " << j+1 << endl;
 
             // Reset filters
             ukf.reset(0, mxi, Pxxi);
@@ -282,12 +294,12 @@ int main() {
             MatrixXd Ztru(2,steps);
             for (int k = 0; k < steps; k++) {
                 Ztru.col(k) = ct_meas(t(k), Xtru[k]);
-                Ztru(0,k) += sr  * nd(mt);
-                Ztru(1,k) += sth * nd(mt);
+                Ztru(0,k) += gennr (mt);
+                Ztru(1,k) += gennth(mt);
             }
 
             // Run UKF
-            //cout << "    UKF" << endl;
+            // cout << "    UKF" << endl;
             timer.tick();
             ukf.run(t, Ztru);
             runtime(0, j) = timer.tock();

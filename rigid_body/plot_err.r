@@ -21,7 +21,7 @@ for (i in 1:2) {
         Filter <- c(Filter, rep(filter[j], steps*trials))
         file  <- paste("out/", fil[j], "_err_", dis[i], ".csv", sep="")
         table <- as.matrix(read.csv(file))
-        err <- sqrt(rowSums(table[,1:3]^2))
+        err <- sqrt(rowSums(table[,1]^2))
         Err <- c(Err, err)
     }
 }
